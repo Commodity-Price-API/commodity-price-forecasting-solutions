@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Commodity Price Forecasting Solution</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --primary: #0f4c75; --secondary: #3282b8; --bg: #f4f6f8;
+      --card: #ffffff; --text: #1f2933; --muted: #6b7280;
+      --success: #16a34a; --error: #dc2626; --accent: #f59e0b;
+    }
+    * { box-sizing: border-box; font-family: "Inter", system-ui, sans-serif; }
+    body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; }
+    header { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; padding: 40px 20px; text-align: center; }
+    main { max-width: 1100px; margin: -30px auto 30px; padding: 0 16px; }
+    .card { background: var(--card); border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+    select, input, button { width: 100%; padding: 12px; margin-bottom: 14px; border-radius: 8px; border: 1px solid #d1d5db; font-size: 15px; }
+    button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: 600; transition: 0.2s; }
+    button:hover { background: var(--secondary); transform: translateY(-1px); }
+    .csv-btn { background: var(--success); }
+    .status { padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 14px; display: none; }
+    .error { display: block; background: #fee2e2; color: var(--error); border: 1px solid #fecaca; }
+    .success { display: block; background: #dcfce7; color: var(--success); border: 1px solid #bbf7d0; }
+    .forecast-badge { background: var(--accent); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; float: right; }
+    .chart-container { position: relative; height: 45vh; width: 100%; margin-top: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: left; }
+    th { background: #f8fafc; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📊 Commodity Forecasting Solution</h1>
+  <p>Harnessing API Data for Predictive Procurement</p>
+</header>
+
+<main>
+  <div class="grid">
+    <div class="card">
+      <h2>🔴 Real-Time Spot</h2>
+      <label>Commodity Symbol</label>
+      <select id="liveSymbol">
+        <option value="XAU">Gold (XAU)</option>
+        <option value="XAG">Silver (XAG)</option>
+        <option value="WTIOIL-FUT">WTI Crude Oil</option>
+        <option value="BRENTOIL-FUT">Brent Oil</option>
+        <option value="NG-FUT">Natural Gas</option>
+      </select>
+      <button onclick="getLivePrice()">Get Current Price</button>
+      <div id="liveResult" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>📅 Historical & Predictive Analysis</h2>
+      <label>Training Data Range</label>
+      <div style="display: flex; gap: 10px;">
+        <input type="date" id="startDate">
+        <input type="date" id="endDate">
+      </div>
+      <button onclick="handleHistoricalRequest()">Fetch & Forecast</button>
+      <button id="downloadBtn" class="csv-btn" style="display:none;" onclick="downloadCSV()">Export Data to CSV</button>
+    </div>
+  </div>
+
+  <div class="card" id="analyticsSection" style="display:none;">
+    <span class="forecast-badge" id="forecastTrend">Analysis Pending</span>
+    <h2>📈 Market Insights & Forecast</h2>
+    <div id="historyStatus" class="status"></div>
+    <div class="chart-container">
+      <canvas id="priceChart"></canvas>
+    </div>
+    <div id="historyTable"></div>
+  </div>
+</main>
+
+<script>
+  const API_KEY = "e66377ea-6a15-4676-9cb0-f5bb386d8f7b";
+  const BASE_URL = "https://api.commoditypriceapi.com/v2";
+  let chartInstance = null;
+  let globalDataStore = [];
+
+  async function getLivePrice() {
+    const symbol = document.getElementById("liveSymbol").value;
+    const result = document.getElementById("liveResult");
+    result.style.display = "block";
+    result.className = "status";
+    result.textContent = "Fetching live feed...";
+
+    try {
+      const res = await fetch(`${BASE_URL}/rates/latest?symbols=${symbol}`, {
+        headers: { "x-api-key": API_KEY }
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+      
+      const val = data.rates[symbol];
+      result.innerHTML = `<strong>Current ${symbol} Spot:</strong> $${val.toLocaleString()} USD`;
+      result.className = "status success";
+    } catch (err) {
+      result.textContent = err.message;
+      result.className = "status error";
+    }
+  }
+
+  async function handleHistoricalRequest() {
+    const symbol = document.getElementById("liveSymbol").value;
+    const startInput = document.getElementById("startDate").value;
+    const endInput = document.getElementById("endDate").value;
+    const status = document.getElementById("historyStatus");
+    const analytics = document.getElementById("analyticsSection");
+
+    if (!startInput || !endInput) return alert("Please select date range.");
+    
+    analytics.style.display = "block";
+    status.style.display = "block";
+    status.className = "status";
+    status.textContent = "Gathering historical data batches...";
+    globalDataStore = [];
+
+    let currentStart = new Date(startInput);
+    const finalEnd = new Date(endInput);
+
+    try {
+      while (currentStart < finalEnd) {
+        let batchEnd = new Date(currentStart);
+        batchEnd.setFullYear(batchEnd.getFullYear() + 1);
+        if (batchEnd > finalEnd) batchEnd = finalEnd;
+
+        const sStr = currentStart.toISOString().split('T')[0];
+        const eStr = batchEnd.toISOString().split('T')[0];
+
+        const res = await fetch(`${BASE_URL}/rates/time-series?symbols=${symbol}&startDate=${sStr}&endDate=${eStr}`, {
+          headers: { "x-api-key": API_KEY }
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+
+        for (const date in data.rates) {
+          const entry = data.rates[date][symbol];
+          const price = typeof entry === 'object' ? entry.close : entry;
+          globalDataStore.push({ date, price });
+        }
+        currentStart = new Date(batchEnd);
+        currentStart.setDate(currentStart.getDate() + 1);
+      }
+
+      const forecastData = runLinearForecasting();
+      renderAnalytics(symbol, forecastData);
+      
+      status.textContent = "Data successfully processed and forecasting model updated.";
+      status.className = "status success";
+      document.getElementById("downloadBtn").style.display = "block";
+
+    } catch (err) {
+      status.textContent = "System Error: " + err.message;
+      status.className = "status error";
+    }
+  }
+
+  function runLinearForecasting() {
+    globalDataStore.sort((a, b) => new Date(a.date) - new Date(b.date));
+    const n = globalDataStore.length;
+    if (n < 2) return null;
+
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    globalDataStore.forEach((d, i) => {
+      sumX += i;
+      sumY += d.price;
+      sumXY += i * d.price;
+      sumXX += i * i;
+    });
+
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+    
+    const nextPrice = slope * n + intercept;
+    const trend = slope > 0 ? "BULLISH" : "BEARISH";
+    
+    document.getElementById("forecastTrend").textContent = `Forecast: ${trend} | Next Est: $${nextPrice.toFixed(2)}`;
+    return { slope, intercept, nextPrice };
+  }
+
+  function renderAnalytics(symbol, forecast) {
+    const labels = globalDataStore.map(d => d.date);
+    const values = globalDataStore.map(d => d.price);
+    
+    // Add one future date to labels for the forecast
+    const lastDate = new Date(labels[labels.length-1]);
+    lastDate.setDate(lastDate.getDate() + 1);
+    const forecastLabel = lastDate.toISOString().split('T')[0];
+
+    if (chartInstance) chartInstance.destroy();
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    
+    chartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [...labels, forecastLabel],
+        datasets: [{
+          label: `Historical ${symbol} Price`,
+          data: values,
+          borderColor: '#3282b8',
+          backgroundColor: 'rgba(50, 130, 184, 0.1)',
+          fill: true,
+          tension: 0.2
+        },
+        {
+          label: 'Regression Forecast',
+          data: [...Array(n = globalDataStore.length).fill(null), forecast.nextPrice],
+          borderColor: '#f59e0b',
+          pointStyle: 'triangle',
+          pointRadius: 8,
+          showLine: false
+        }]
+      },
+      options: { 
+        responsive: true, 
+        maintainAspectRatio: false,
+        plugins: { tooltip: { mode: 'index' } }
+      }
+    });
+
+    let table = `<table><tr><th>Date</th><th>Price (USD)</th><th>Type</th></tr>`;
+    globalDataStore.slice(-5).reverse().forEach(row => {
+      table += `<tr><td>${row.date}</td><td>$${row.price.toFixed(2)}</td><td>Actual</td></tr>`;
+    });
+    table += `<tr style="color:var(--accent); font-weight:bold;"><td>${forecastLabel}</td><td>$${forecast.nextPrice.toFixed(2)}</td><td>Forecasted</td></tr>`;
+    table += `</table>`;
+    document.getElementById("historyTable").innerHTML = table;
+  }
+
+  function downloadCSV() {
+    const symbol = document.getElementById("liveSymbol").value;
+    let csv = "Date,Symbol,Price_USD,Type\n";
+    globalDataStore.forEach(row => {
+      csv += `${row.date},${symbol},${row.price},Actual\n`;
+    });
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `Forecast_Data_${symbol}.csv`;
+    a.click();
+  }
+</script>
+
+</body>
+</html>
